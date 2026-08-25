@@ -414,7 +414,7 @@ static void	fasta_walk(const char *root, const char *rel, const char *out){
 }
 
 /* FNV-1a gives a stable bucket for a filename stem on every platform. */
-static uint64_t stem_bucket(const char *name, size_t files_per_shard){
+static uint64_t stem_bucket(const char *name, size_t number_of_shards){
 	char stem[4096];
 	const char *dot = strrchr(name, '.');
 	size_t n = dot ? (size_t)(dot - name) : strlen(name);
@@ -426,7 +426,13 @@ static uint64_t stem_bucket(const char *name, size_t files_per_shard){
 		h ^= (unsigned char)stem[i];
 		h *= UINT64_C(1099511628211);
 	}
-	return h % files_per_shard;
+	return h % number_of_shards;
+}
+
+static unsigned shard_width(size_t number_of_shards){
+	unsigned width = 1;
+	for (size_t limit = 10; number_of_shards > limit; limit *= 10) ++width;
+	return width;
 }
 
 static void copy_file(const char *in, const char *out){
@@ -445,7 +451,7 @@ static void copy_file(const char *in, const char *out){
 }
 
 static void shard_walk(const char *root, const char *rel, const char *out,
-			       const char *extension, size_t files_per_shard){
+			       const char *extension, size_t number_of_shards){
 	char dir[4096];
 	DIR *d;
 	struct dirent *e;
@@ -461,12 +467,12 @@ static void shard_walk(const char *root, const char *rel, const char *out,
 		snprintf(in, sizeof(in), "%s/%s", root, r);
 		if (stat(in, &st)) die("cannot stat shard input");
 		if (S_ISDIR(st.st_mode)) {
-			shard_walk(root, r, out, extension, files_per_shard);
+			shard_walk(root, r, out, extension, number_of_shards);
 			continue;
 		}
 		if (n < el || strcmp(e->d_name + n - el, extension)) continue;
-		snprintf(shard, sizeof(shard), "%08llu",
-			 (unsigned long long)stem_bucket(e->d_name, files_per_shard));
+		snprintf(shard, sizeof(shard), "%0*llu", (int)shard_width(number_of_shards),
+			 (unsigned long long)stem_bucket(e->d_name, number_of_shards));
 		snprintf(dest, sizeof(dest), "%s/%s/%s", out, shard, e->d_name);
 		copy_file(in, dest);
 	}
@@ -475,22 +481,22 @@ static void shard_walk(const char *root, const char *rel, const char *out,
 
 static int shard_command(int ac, char **av){
 	const char *in = NULL, *out = NULL, *extension = NULL;
-	size_t files_per_shard = 1000;
+	size_t number_of_shards = 100;
 	for (int i = 2; i < ac; ++i) {
 		if (!strcmp(av[i], "--input-dir") && i + 1 < ac) in = av[++i];
 		else if (!strcmp(av[i], "--output-dir") && i + 1 < ac) out = av[++i];
 		else if (!strcmp(av[i], "--extension") && i + 1 < ac) extension = av[++i];
-		else if (!strcmp(av[i], "--files-per-shard") && i + 1 < ac)
-			files_per_shard = (size_t)strtoull(av[++i], NULL, 10);
+		else if (!strcmp(av[i], "--number-of-shards") && i + 1 < ac)
+			number_of_shards = (size_t)strtoull(av[++i], NULL, 10);
 		else if (!strcmp(av[i], "--help")) {
 			puts("cryptic shard --input-dir D --output-dir O --extension .fasta "
-			     "[--files-per-shard 1000]");
+			     "[--number-of-shards 100]");
 			return 0;
 		} else die("unknown shard option");
 	}
-	if (!in || !out || !extension || files_per_shard == 0)
-		die("shard needs --input-dir --output-dir --extension and positive --files-per-shard");
-	shard_walk(in, "", out, extension, files_per_shard);
+	if (!in || !out || !extension || number_of_shards == 0)
+		die("shard needs --input-dir --output-dir --extension and positive --number-of-shards");
+	shard_walk(in, "", out, extension, number_of_shards);
 	return 0;
 }
 #undef main
