@@ -28,6 +28,22 @@ static Buf readseq(const char *fn){
 	if (!b.p || fread(b.p, 1, b.n, f) != b.n)
 		die("cannot read input");
 	fclose(f);
+	/* FASTA input is canonicalized by discarding headers and line wrapping. */
+	if (b.n && b.p[0] == '>') {
+		unsigned char *q = malloc(b.n + 1);
+		size_t out = 0, i = 0;
+		if (!q) die("out of memory");
+		while (i < b.n) {
+			size_t line = i;
+			while (i < b.n && b.p[i] != '\n' && b.p[i] != '\r') ++i;
+			if (b.p[line] != '>') {
+				for (size_t j = line; j < i; ++j)
+					if (b.p[j] != ' ' && b.p[j] != '\t') q[out++] = b.p[j];
+			}
+			while (i < b.n && (b.p[i] == '\n' || b.p[i] == '\r')) ++i;
+		}
+		free(b.p); b.p = q; b.n = out;
+	}
 	if (b.n && b.p[b.n - 1] == '\n')
 		b.n--;
 	if (b.n && b.p[b.n - 1] == '\r')
@@ -146,7 +162,10 @@ static char **	names(const char *d, size_t * n){
 	struct dirent  *e;
 	while ((e = readdir(x))) {
 		size_t		l = strlen(e->d_name);
-		if (l < 4 || strcmp(e->d_name + l - 4, ".seq"))
+		if (l < 4 || (strcmp(e->d_name + l - 4, ".seq") &&
+				      strcmp(e->d_name + l - 4, ".fasta") &&
+				      strcmp(e->d_name + l - 4, ".fna") &&
+				      strcmp(e->d_name + l - 3, ".fa")))
 			continue;
 		v = realloc(v, (*n + 1) * sizeof(*v));
 		if (!v)
@@ -301,9 +320,16 @@ static void	decode(const char *ref, const char *in, const char *out, int verify)
 			mkdir(out, 0777);
 			char		path[4096];
 			snprintf(path, sizeof path, "%s/%s", out, name);
+			char *ext = strrchr(path, '.');
+			if (ext) strcpy(ext, ".fasta");
 			FILE	       *o = fopen(path, "wb");
 			if (!o)
 				die("cannot create output");
+			char sample_name[4097];
+			snprintf(sample_name, sizeof sample_name, "%s", name);
+			char *sample_ext = strrchr(sample_name, '.');
+			if (sample_ext) *sample_ext = 0;
+			fprintf(o, ">%s\n", sample_name);
 			fwrite(s, 1, r.n, o);
 			fputc('\n', o);
 			fclose(o);
@@ -357,6 +383,12 @@ static void	convert_fasta(const char *in, const char *out){
 	if (!o)
 		die("cannot create seq output");
 	int		seen = 0;
+	const char *base_name = strrchr(in, '/');
+	base_name = base_name ? base_name + 1 : in;
+	char sample[4096];
+	snprintf(sample, sizeof sample, "%s", base_name);
+	char *sample_dot = strrchr(sample, '.');
+	if (sample_dot) *sample_dot = 0;
 	while (fgets(line, sizeof line, f)) {
 		size_t		n = strlen(line);
 		while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
@@ -364,6 +396,8 @@ static void	convert_fasta(const char *in, const char *out){
 		if (line[0] == '>') {
 			if (seen)
 				fputc('\n', o);
+			else
+				fprintf(o, ">%s\n", sample);
 			seen = 1;
 			continue;
 		} if (!seen)
@@ -474,7 +508,11 @@ static void shard_walk(const char *root, const char *rel, const char *out,
 		snprintf(shard, sizeof(shard), "%0*llu", (int)shard_width(number_of_shards),
 			 (unsigned long long)stem_bucket(e->d_name, number_of_shards));
 		snprintf(dest, sizeof(dest), "%s/%s/%s", out, shard, e->d_name);
-		copy_file(in, dest);
+		if (!strcmp(extension, ".fa") || !strcmp(extension, ".fna") ||
+			!strcmp(extension, ".fasta"))
+			convert_fasta(in, dest);
+		else
+			copy_file(in, dest);
 	}
 	closedir(d);
 }
@@ -488,9 +526,11 @@ static int shard_command(int ac, char **av){
 		else if (!strcmp(av[i], "--extension") && i + 1 < ac) extension = av[++i];
 		else if (!strcmp(av[i], "--number-of-shards") && i + 1 < ac)
 			number_of_shards = (size_t)strtoull(av[++i], NULL, 10);
-		else if (!strcmp(av[i], "--help")) {
+		else if (!strcmp(av[i], "--preprocess-fasta"))
+			continue;
+		else if (!strcmp(av[i], "--help") || !strcmp(av[i], "-h")) {
 			puts("cryptic shard --input-dir D --output-dir O --extension .fasta "
-			     "[--number-of-shards 100]");
+			     "[--number-of-shards 100] [--preprocess-fasta]");
 			return 0;
 		} else die("unknown shard option");
 	}
@@ -511,7 +551,7 @@ int		main(int ac, char **av){
 				in = av[++i];
 			else if (!strcmp(av[i], "--output-dir") && i + 1 < ac)
 				out = av[++i];
-			else if (!strcmp(av[i], "--help")) {
+			else if (!strcmp(av[i], "--help") || !strcmp(av[i], "-h")) {
 				puts("cryptic fasta-to-seq --input-dir FASTAS --output-dir SEQS");
 				return 0;
 			} else
@@ -539,7 +579,7 @@ int		main(int ac, char **av){
 			out = av[++i];
 		else if (!strcmp(av[i], "--output-dir") && i + 1 < ac)
 			out = av[++i];
-		else if (!strcmp(av[i], "--help")) {
+		else if (!strcmp(av[i], "--help") || !strcmp(av[i], "-h")) {
 			puts("cryptic encode --reference R --input-dir D --output A\ncryptic decode --reference R --input A --output-dir D\ncryptic verify --reference R --input A\ncryptic stats --reference R --input-dir D");
 			return 0;
 		} else
