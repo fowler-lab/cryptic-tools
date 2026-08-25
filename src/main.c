@@ -544,28 +544,12 @@ int		legacy_main(int, char **);
 int		main(int ac, char **av){
 	if (ac >= 2 && !strcmp(av[1], "shard"))
 		return shard_command(ac, av);
-	if (ac >= 2 && !strcmp(av[1], "fasta-to-seq")) {
-		const char     *in = NULL, *out = NULL;
-		for (int i = 2; i < ac; i++) {
-			if (!strcmp(av[i], "--input-dir") && i + 1 < ac)
-				in = av[++i];
-			else if (!strcmp(av[i], "--output-dir") && i + 1 < ac)
-				out = av[++i];
-			else if (!strcmp(av[i], "--help") || !strcmp(av[i], "-h")) {
-				puts("cryptic fasta-to-seq --input-dir FASTAS --output-dir SEQS");
-				return 0;
-			} else
-				die("unknown option");
-		} if (!in || !out)
-			die("fasta-to-seq needs --input-dir and --output-dir");
-		fasta_walk(in, "", out);
-		return 0;
-	} return legacy_main(ac, av);
+	return legacy_main(ac, av);
 }
 #define main legacy_main
 int		main(int ac, char **av){
 	if (ac < 2 || !strcmp(av[1], "--help") || !strcmp(av[1], "-h")) {
-		puts("usage: cryptic <command> [options]\n\ncommands:\n  encode   encode a directory\n  decode   restore samples\n  verify   validate an archive\n  inspect  show archive header\n  stats    report reference differences\n  fasta-to-seq convert FASTA shards\n  shard    copy matching files into deterministic buckets\n\nUse cryptic <command> --help for examples.");
+		puts("usage: cryptic <command> [options]\n\ncommands:\n  encode   encode a directory\n  decode   restore samples\n  verify   validate an archive\n  inspect  show archive header\n  stats    report reference differences\n  shard    copy matching files into deterministic buckets\n\nUse cryptic <command> --help for examples.");
 		return ac < 2 ? 2 : 0;
 	} const char   *ref = NULL, *dir = NULL, *in = NULL, *out = NULL;
 	for (int i = 2; i < ac; i++) {
