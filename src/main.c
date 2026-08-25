@@ -16,6 +16,13 @@ static void	die(const char *s){
 	fprintf(stderr, "cryptic: %s\n", s);
 	exit(1);
 }
+static void progress(uint64_t done, uint64_t total, const char *label){
+	if (total) printf("\r%s: %llu/%llu (%.1f%%)", label,
+		(unsigned long long)done, (unsigned long long)total,
+		100.0 * (double)done / (double)total);
+	else printf("\r%s: %llu", label, (unsigned long long)done);
+	fflush(stdout);
+}
 static Buf readseq(const char *fn){
 	FILE	       *f = fopen(fn, "rb");
 	if (!f)
@@ -225,6 +232,7 @@ static void	encode(const char *ref, const char *dir, const char *ext, const char
 	fwrite(rh, 1, 32, f);
 	put8(f, n);
 	for (size_t k = 0; k < n; k++) {
+		progress(k, n, "encoding");
 		Buf s = readseq(v[k].path);
 		checkseq(s, r.n);
 		unsigned char	sh[32];
@@ -270,7 +278,9 @@ static void	encode(const char *ref, const char *dir, const char *ext, const char
 				i++;
 			}
 		} free(s.p);
-	} fclose(f);
+	}
+	progress(n, n, "encoding"); puts("");
+	fclose(f);
 	free(r.p);
 	for (size_t i = 0; i < n; i++) { free(v[i].path); free(v[i].name); }
 	free(v);
@@ -297,6 +307,7 @@ static void	decode(const char *ref, const char *in, const char *out, int verify)
 	uint64_t	n = get8(f);
 	Buf		r = readseq(ref);
 	for (uint64_t k = 0; k < n; k++) {
+		progress(k, n, verify ? "verifying" : "decoding");
 		uint64_t	nl = getv(f);
 		if (nl == 0 || nl > 4096)
 			die("invalid filename length");
@@ -358,7 +369,9 @@ static void	decode(const char *ref, const char *in, const char *out, int verify)
 			fputc('\n', o);
 			fclose(o);
 		} free(s);
-	} free(r.p);
+	}
+	progress(n, n, verify ? "verifying" : "decoding"); puts("");
+	free(r.p);
 	fclose(f);
 }
 static void	stats(const char *ref, const char *dir){
