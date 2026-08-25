@@ -1,0 +1,4 @@
+cryptic
+*.cryptic
+*.o
+restored/
