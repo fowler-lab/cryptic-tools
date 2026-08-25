@@ -182,13 +182,40 @@ static void	checkseq(Buf b, size_t len) {
 		if (!base(b.p[i]))
 			die("invalid DNA character");
 }
+typedef struct { char *path; char *name; } InputFile;
+static int cmp_input(const void *a, const void *b){
+	const InputFile *x = a, *y = b;
+	int c = strcmp(x->name, y->name);
+	return c ? c : strcmp(x->path, y->path);
+}
+static void find_inputs(const char *root, const char *rel, const char *ext,
+			InputFile **v, size_t *n){
+	char dir[4096]; snprintf(dir, sizeof dir, "%s/%s", root, rel);
+	DIR *d = opendir(dir); if (!d) die("cannot open input directory");
+	struct dirent *e;
+	while ((e = readdir(d))) {
+		if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+		char r[4096], p[4096]; struct stat st;
+		snprintf(r, sizeof r, "%s%s%s", rel, *rel ? "/" : "", e->d_name);
+		snprintf(p, sizeof p, "%s/%s", root, r);
+		if (stat(p, &st)) die("cannot stat input file");
+		if (S_ISDIR(st.st_mode)) { find_inputs(root, r, ext, v, n); continue; }
+		size_t l = strlen(e->d_name), el = strlen(ext);
+		if (l < el || strcmp(e->d_name + l - el, ext)) continue;
+		*v = realloc(*v, (*n + 1) * sizeof **v); if (!*v) die("out of memory");
+		(*v)[*n].path = strdup(p); (*v)[*n].name = strdup(e->d_name);
+		if (!(*v)[*n].path || !(*v)[*n].name) die("out of memory");
+		++*n;
+	}
+	closedir(d);
+}
 /* Sorted filenames and delta records make output reproducible across filesystems. */
-static void	encode(const char *ref, const char *dir, const char *out){
+static void	encode(const char *ref, const char *dir, const char *ext, const char *out){
 	Buf		r = readseq(ref);
 	unsigned char	rh[32];
 	hash(r.p, r.n, rh);
-	size_t		n = 0;
-	char	      **v = names(dir, &n);
+	size_t n = 0; InputFile *v = NULL;
+	find_inputs(dir, "", ext, &v, &n); qsort(v, n, sizeof *v, cmp_input);
 	FILE	       *f = fopen(out, "wb");
 	if (!f)
 		die("cannot create archive");
@@ -198,9 +225,7 @@ static void	encode(const char *ref, const char *dir, const char *out){
 	fwrite(rh, 1, 32, f);
 	put8(f, n);
 	for (size_t k = 0; k < n; k++) {
-		char		path[4096];
-		snprintf(path, sizeof path, "%s/%s", dir, v[k]);
-		Buf		s = readseq(path);
+		Buf s = readseq(v[k].path);
 		checkseq(s, r.n);
 		unsigned char	sh[32];
 		hash(s.p, s.n, sh);
@@ -219,8 +244,8 @@ static void	encode(const char *ref, const char *dir, const char *out){
 				records++;
 				i++;
 			}
-		} putv(f, strlen(v[k]));
-		fwrite(v[k], 1, strlen(v[k]), f);
+		} putv(f, strlen(v[k].name));
+		fwrite(v[k].name, 1, strlen(v[k].name), f);
 		put8(f, records);
 		fwrite(sh, 1, 32, f);
 		size_t		prev = 0;
@@ -247,8 +272,7 @@ static void	encode(const char *ref, const char *dir, const char *out){
 		} free(s.p);
 	} fclose(f);
 	free(r.p);
-	for (size_t i = 0; i < n; i++)
-		free(v[i]);
+	for (size_t i = 0; i < n; i++) { free(v[i].path); free(v[i].name); }
 	free(v);
 }
 static void	openarc(FILE * f, const char *ref){
@@ -551,7 +575,7 @@ int		main(int ac, char **av){
 	if (ac < 2 || !strcmp(av[1], "--help") || !strcmp(av[1], "-h")) {
 		puts("usage: cryptic <command> [options]\n\ncommands:\n  encode   encode a directory\n  decode   restore samples\n  verify   validate an archive\n  inspect  show archive header\n  stats    report reference differences\n  shard    copy matching files into deterministic buckets\n\nUse cryptic <command> --help for examples.");
 		return ac < 2 ? 2 : 0;
-	} const char   *ref = NULL, *dir = NULL, *in = NULL, *out = NULL;
+	} const char   *ref = NULL, *dir = NULL, *in = NULL, *out = NULL, *ext = NULL;
 	for (int i = 2; i < ac; i++) {
 		if (!strcmp(av[i], "--reference") && i + 1 < ac)
 			ref = av[++i];
@@ -563,15 +587,17 @@ int		main(int ac, char **av){
 			out = av[++i];
 		else if (!strcmp(av[i], "--output-dir") && i + 1 < ac)
 			out = av[++i];
+		else if (!strcmp(av[i], "--extension") && i + 1 < ac)
+			ext = av[++i];
 		else if (!strcmp(av[i], "--help") || !strcmp(av[i], "-h")) {
-			puts("cryptic encode --reference R --input-dir D --output A\ncryptic decode --reference R --input A --output-dir D\ncryptic verify --reference R --input A\ncryptic stats --reference R --input-dir D");
+			puts("cryptic encode --reference R --input-dir D --extension .fasta --output A\ncryptic decode --reference R --input A --output-dir D\ncryptic verify --reference R --input A\ncryptic stats --reference R --input-dir D");
 			return 0;
 		} else
 			die("unknown option");
 	} if (!strcmp(av[1], "encode")) {
-		if (!ref || !dir || !out)
-			die("encode needs --reference --input-dir --output");
-		encode(ref, dir, out);
+		if (!ref || !dir || !ext || !out)
+			die("encode needs --reference --input-dir --extension --output");
+		encode(ref, dir, ext, out);
 	} else if (!strcmp(av[1], "decode")) {
 		if (!ref || !in || !out)
 			die("decode needs --reference --input --output-dir");
